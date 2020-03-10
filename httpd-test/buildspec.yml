@@ -1,0 +1,37 @@
+version: 0.2
+
+phases:
+  install:
+    commands:
+      - rm -f /usr/local/bin/kubectl && curl -Lo /usr/local/bin/kubectl https://storage.googleapis.com/kubernetes-release/release/v1.16.0/bin/linux/amd64/kubectl
+      - rm -f /usr/local/bin/aws-iam-authenticator && curl -o aws-iam-authenticator https://amazon-eks.s3-us-west-2.amazonaws.com/1.14.6/2019-08-22/bin/darwin/amd64/aws-iam-authenticator && chmod -R +x /usr/local/bin
+      - curl -Lo helm.tar.gz https://get.helm.sh/helm-v3.1.1-linux-amd64.tar.gz
+      - tar -xzf helm.tar.gz && chmod +x linux-amd64/helm && mv linux-amd64/helm /usr/local/bin/
+      - helm plugin install https://github.com/hypnoglow/helm-s3.git
+  pre_build:
+    commands:
+      - echo Logging in to Amazon ECR...
+      - aws --version
+      - $(aws ecr get-login --region $AWS_DEFAULT_REGION --no-include-email)
+      - REPOSITORY_URI=600377393768.dkr.ecr.eu-west-1.amazonaws.com/httpd-test
+      - COMMIT_HASH=$(echo $CODEBUILD_RESOLVED_SOURCE_VERSION | cut -c 1-7)
+      - IMAGE_TAG=${COMMIT_HASH:=latest}
+      - aws eks update-kubeconfig --name $EKS_CLUSTER_NAME
+      - kubectl config use-context $EKS_CLUSTER_ARN && cat /root/.kube/config
+
+  build:
+    commands:
+      - echo Build started on `date`
+      - echo Building the Docker image...
+      - docker build -t $REPOSITORY_URI:latest .
+      - docker tag $REPOSITORY_URI:latest $REPOSITORY_URI:$IMAGE_TAG
+  post_build:
+    commands:
+      - echo Build completed on `date`
+      - echo Pushing the Docker images...
+      - docker push $REPOSITORY_URI:latest
+      - docker push $REPOSITORY_URI:$IMAGE_TAG
+      - helm repo add sum41k-charts s3://sum41k-helm-charts/charts
+      - helm install httpd-test sum41k-charts/httpd-test
+      - helm upgrade httpd-test sum41k-charts/httpd-test
+

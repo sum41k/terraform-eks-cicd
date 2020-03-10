@@ -1,0 +1,152 @@
+
+data "aws_eks_cluster" "cluster" {
+  name = module.eks.cluster_id
+}
+
+data "aws_eks_cluster_auth" "cluster" {
+  name = module.eks.cluster_id
+}
+
+# data "template_file" "eks_role" {
+#   template = "${file("${path.module}/files/eks-role.json")}"
+# }
+
+
+locals {
+  cluster_name = "test-eks-${random_string.suffix.result}"
+}
+
+resource "random_string" "suffix" {
+  length  = 8
+  special = false
+}
+
+resource "aws_security_group" "worker_group_mgmt_one" {
+  name_prefix = "worker_group_mgmt_one"
+  vpc_id      = "${data.aws_vpc.default.id}"
+
+  ingress {
+    from_port = 22
+    to_port   = 22
+    protocol  = "tcp"
+
+    cidr_blocks = [
+      "10.0.0.0/8",
+    ]
+  }
+}
+
+resource "aws_security_group" "worker_group_mgmt_two" {
+  name_prefix = "worker_group_mgmt_two"
+  vpc_id      = "${data.aws_vpc.default.id}"
+
+  ingress {
+    from_port = 22
+    to_port   = 22
+    protocol  = "tcp"
+
+    cidr_blocks = [
+      "192.168.0.0/16",
+    ]
+  }
+}
+
+resource "aws_security_group" "all_worker_mgmt" {
+  name_prefix = "all_worker_management"
+  vpc_id      = "${data.aws_vpc.default.id}"
+
+  ingress {
+    from_port = 22
+    to_port   = 22
+    protocol  = "tcp"
+
+    cidr_blocks = [
+      "10.0.0.0/8",
+      "172.16.0.0/12",
+      "192.168.0.0/16",
+    ]
+  }
+}
+
+# module "vpc" {
+#   source  = "terraform-aws-modules/vpc/aws"
+#   version = "2.6.0"
+#
+#   name               = "test-vpc"
+#   cidr               = "10.0.0.0/16"
+#   azs                = data.aws_availability_zones.available.names
+#   private_subnets    = ["10.0.1.0/24", "10.0.2.0/24", "10.0.3.0/24"]
+#   public_subnets     = ["10.0.4.0/24", "10.0.5.0/24", "10.0.6.0/24"]
+#   enable_nat_gateway = true
+#   single_nat_gateway = true
+#   # enable_dns_hostnames = true
+#
+#   tags = {
+#     "kubernetes.io/cluster/${local.cluster_name}" = "shared"
+#   }
+#
+#   public_subnet_tags = {
+#     "kubernetes.io/cluster/${local.cluster_name}" = "shared"
+#     "kubernetes.io/role/elb"                      = "1"
+#   }
+#
+#   private_subnet_tags = {
+#     "kubernetes.io/cluster/${local.cluster_name}" = "shared"
+#     "kubernetes.io/role/internal-elb"             = "1"
+#   }
+# }
+
+module "eks" {
+  source       = "terraform-aws-modules/eks/aws"
+  cluster_name = local.cluster_name
+  subnets      = "${data.aws_subnet_ids.default.ids}"
+  # cluster_iam_role_name = aws_iam_role.eks_instance_profile.name
+  workers_group_defaults = {
+    target_group_arns = module.alb.target_group_arns
+  }
+  tags = {
+    Environment = "test"
+    GithubRepo  = "terraform-aws-eks"
+    GithubOrg   = "terraform-aws-modules"
+  }
+
+  vpc_id = "${data.aws_vpc.default.id}"
+
+  worker_groups = [
+    {
+      name                          = "worker-group-1"
+      instance_type                 = "t2.micro"
+      additional_userdata           = "echo foo bar"
+      asg_desired_capacity          = 3
+      additional_security_group_ids = [aws_security_group.worker_group_mgmt_one.id]
+    }
+    # {
+    #   name                          = "worker-group-2"
+    #   instance_type                 = "t2.micro"
+    #   additional_userdata           = "echo foo bar"
+    #   additional_security_group_ids = [aws_security_group.worker_group_mgmt_two.id]
+    #   asg_desired_capacity          = 2
+    # },
+  ]
+
+  worker_additional_security_group_ids = [aws_security_group.all_worker_mgmt.id]
+  # map_roles                            = [aws_iam_role.eks_instance_profile.id]
+  map_roles = var.map_roles
+  map_users = var.map_users
+  # map_accounts                         = var.map_accounts
+}
+
+# #IAM
+# resource "aws_iam_role" "eks_instance_profile" {
+#   name               = "AWSServiceRoleEKSCluster"
+#   path               = "/eks"
+#   assume_role_policy = "${data.template_file.eks_role.rendered}"
+# }
+#
+# resource "aws_iam_instance_profile" "eks" {
+#   name = "${local.cluster_name}-eks-instance-profile"
+#   role = "${aws_iam_role.eks_instance_profile.name}"
+# }
+#
+# cluster_iam_role_name            = "AWSServiceRoleEKSCluster-cores"
+# worker_iam_instance_profile_name = "AWSServiceRoleEKSWorkerNode-cores"
